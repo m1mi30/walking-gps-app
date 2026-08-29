@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>卒論用 GPS歩行経路記録アプリ (Step 5-9 Complete)</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <!-- FontAwesome for UI Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+    
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+
+        /* App Container Layout */
+        #app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100vw;
+            position: relative;
+        }
+
+        /* Top Status Dashboard Card */
+        #status-card {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            z-index: 1000;
+            background: rgba(15, 23, 42, 0.92);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 16px;
+            padding: 12px 14px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            text-align: center;
+        }
+
+        .status-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #94a3b8;
+            margin-bottom: 2px;
+        }
+
+        .status-value {
+            font-size: 13px;
+            font-weight: 700;
+            color: #f8fafc;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .badge-warning { background-color: #f59e0b; color: #78350f; }
+        .badge-success { background-color: #10b981; color: #064e3b; }
+        .badge-danger  { background-color: #ef4444; color: #450a0a; }
+        .badge-info    { background-color: #3b82f6; color: #1e3a8a; }
+        .badge-purple  { background-color: #8b5cf6; color: #2e1065; }
+
+        /* Map Fullscreen Element */
+        #map {
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        /* Bottom Control Panel */
+        #control-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 12px;
+            right: 12px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .action-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 12px;
+            border: none;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .btn:active {
+            transform: scale(0.96);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: #ffffff;
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #ffffff;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: #ffffff;
+        }
+
+        .btn-secondary {
+            background: rgba(30, 41, 59, 0.92);
+            color: #f1f5f9;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+        }
+
+        .btn-export {
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            color: #ffffff;
+        }
+
+        .btn-active {
+            background: #3b82f6 !important;
+            color: #ffffff !important;
+        }
+
+        /* Custom Marker Pulse Effect */
+        .gps-pulse-icon {
+            background: #3b82f6;
+            border: 3px solid #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 0 12px rgba(59, 130, 246, 0.9);
+        }
+
+        /* Leaflet Control Adjustment for Mobile */
+        .leaflet-control-attribution {
+            font-size: 9px !important;
+            background: rgba(255, 255, 255, 0.7) !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        
+        <!-- Status Dashboard -->
+        <div id="status-card">
+            <!-- Row 1: Status Badges -->
+            <div class="status-grid">
+                <div class="status-item">
+                    <span class="status-label">GPS ステータス</span>
+                    <span id="gps-status" class="badge badge-warning">測位中...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">精度 (Accuracy)</span>
+                    <span id="gps-accuracy" class="status-value">-- m</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">記録状態</span>
+                    <span id="record-state" class="badge badge-warning">待機中</span>
+                </div>
+            </div>
+
+            <!-- Row 2: Walk Distance & Time Metrics -->
+            <div class="status-grid" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.12);">
+                <div class="status-item">
+                    <span class="status-label">取得ポイント</span>
+                    <span id="point-count" class="status-value">0 pts</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">概算歩行距離</span>
+                    <span id="distance-val" class="status-value">0 m</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">経過時間</span>
+                    <span id="timer-val" class="status-value">00:00:00</span>
+                </div>
+            </div>
+
+            <!-- Row 3: Coords & Sensor Info -->
+            <div class="status-grid" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.12);">
+                <div class="status-item" style="grid-column: span 2;">
+                    <span class="status-label">現在座標 (Lat, Lng)</span>
+                    <span id="coords-val" class="status-value" style="font-size: 11px;">--</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">速度 / 方位</span>
+                    <span id="sensor-val" class="status-value" style="font-size: 11px;">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaflet Map Canvas -->
+        <div id="map"></div>
+
+        <!-- Controls -->
+        <div id="control-panel">
+            <!-- Camera & Follow Toggle Row -->
+            <div class="action-row">
+                <button id="btn-recenter" class="btn btn-secondary">
+                    <i class="fa-solid fa-crosshairs"></i>
+                    <span>現在地</span>
+                </button>
+                <button id="btn-follow" class="btn btn-secondary btn-active">
+                    <i class="fa-solid fa-location-arrow"></i>
+                    <span>追従 ON</span>
+                </button>
+            </div>
+
+            <!-- Main Dynamic Control Row for Recording -->
+            <div id="recording-controls" class="action-row">
+                <!-- Buttons will be dynamically updated by JavaScript according to state -->
+                <button id="btn-main-record" class="btn btn-primary">
+                    <i class="fa-solid fa-play"></i>
+                    <span>記録開始</span>
+                </button>
+            </div>
+
+            <!-- Export Buttons Row (Shown when Finished) -->
+            <div id="export-controls" class="action-row" style="display: none;">
+                <button id="btn-export-geojson" class="btn btn-export">
+                    <i class="fa-solid fa-file-code"></i>
+                    <span>GeoJSON 保存</span>
+                </button>
+                <button id="btn-export-csv" class="btn btn-export">
+                    <i class="fa-solid fa-file-csv"></i>
+                    <span>CSV 保存</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS CDN -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <script>
+
+        // --- State Management ---
+        const appState = {
+            // Leaflet instances
+            map: null,
+            marker: null,
+            accuracyCircle: null,
+            polyline: null,
+
+            // GPS Raw State
+            currentLocation: null, // [lat, lng]
+            currentAccuracy: null,
+            watchId: null,
+            isFollowing: true,
+
+            // Recording Session State
+            recordState: 'IDLE', // 'IDLE' | 'RECORDING' | 'PAUSED' | 'FINISHED'
+            trackId: '',
+            startTime: null,
+            endTime: null,
+            recordedPoints: [], // Raw point logs for research
+            totalDistanceMeters: 0,
+            
+            // Timer State
+            elapsedSeconds: 0,
+            timerInterval: null,
+
+            // Screen Wake Lock (To prevent phone sleep during walk)
+            wakeLock: null
+        };
+
+        // --- DOM Elements Reference ---
+        const dom = {
+            gpsStatus: document.getElementById('gps-status'),
+            gpsAccuracy: document.getElementById('gps-accuracy'),
+            recordState: document.getElementById('record-state'),
+            pointCount: document.getElementById('point-count'),
+            distanceVal: document.getElementById('distance-val'),
+            timerVal: document.getElementById('timer-val'),
+            coordsVal: document.getElementById('coords-val'),
+            sensorVal: document.getElementById('sensor-val'),
+            btnRecenter: document.getElementById('btn-recenter'),
+            btnFollow: document.getElementById('btn-follow'),
+            recordingControls: document.getElementById('recording-controls'),
+            exportControls: document.getElementById('export-controls')
+        };
+
+
+        // --- Map Initialization ---
+        function initMap() {
+            // Tokyo Station as default view center until initial GPS fix
+            const defaultCoords = [35.681236, 139.767125];
+            
+            appState.map = L.map('map', {
+                zoomControl: false,
+                attributionControl: true
+            }).setView(defaultCoords, 16);
+
+            // OpenStreetMap Standard Tiles
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            }).addTo(appState.map);
+
+            L.control.zoom({ position: 'topright' }).addTo(appState.map);
+
+            // Create initial Polyline for tracking route
+            appState.polyline = L.polyline([], {
+                color: '#ec4899', // Bright Pink for research visibility
+                weight: 5,
+                opacity: 0.85,
+                lineJoin: 'round'
+            }).addTo(appState.map);
+
+            // Stop auto-following if user manually drags map
+            appState.map.on('dragstart', () => {
+                setFollowState(false);
+            });
+        }
+
+
+        // --- Geolocation Watcher ---
+        function startGPSWatch() {
+            if (!("geolocation" in navigator)) {
+                dom.gpsStatus.textContent = "非対応";
+                dom.gpsStatus.className = "badge badge-danger";
+                showToast("お使いのブラウザは位置情報(Geolocation)に対応していません。");
+                return;
+            }
+
+            const options = {
+                enableHighAccuracy: true, // Force hardware GPS usage
+                timeout: 20000,           // 20s max timeout per location update
+                maximumAge: 0             // Always request fresh real-time position
+            };
+
+            appState.watchId = navigator.geolocation.watchPosition(
+                onLocationSuccess,
+                onLocationError,
+                options
+            );
+        }
+
+        function onLocationSuccess(position) {
+            const coords = position.coords;
+            const lat = coords.latitude;
+            const lng = coords.longitude;
+            const accuracy = coords.accuracy;
+
+            // Basic validation for invalid coordinate values
+            if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+                return;
+            }
+
+            appState.currentLocation = [lat, lng];
+            appState.currentAccuracy = accuracy;
+
+            // 1. Update UI Metrics Panel
+            dom.gpsAccuracy.textContent = `${accuracy.toFixed(1)} m`;
+            dom.coordsVal.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+            
+            const speedKmH = (coords.speed !== null && !isNaN(coords.speed)) ? (coords.speed * 3.6).toFixed(1) : "--";
+            const headingDeg = (coords.heading !== null && !isNaN(coords.heading)) ? Math.round(coords.heading) : "--";
+            dom.sensorVal.textContent = `${speedKmH}km/h | ${headingDeg}°`;
+
+            // Update GPS Signal Quality Indicator
+            if (accuracy <= 10) {
+                dom.gpsStatus.textContent = "高精度";
+                dom.gpsStatus.className = "badge badge-success";
+            } else if (accuracy <= 25) {
+                dom.gpsStatus.textContent = "良好";
+                dom.gpsStatus.className = "badge badge-info";
+            } else {
+                dom.gpsStatus.textContent = "精度低";
+                dom.gpsStatus.className = "badge badge-warning";
+            }
+
+            // 2. Update Map Marker & Accuracy Circle
+            if (!appState.marker) {
+                const customIcon = L.divIcon({
+                    className: 'gps-pulse-icon',
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9]
+                });
+                appState.marker = L.marker([lat, lng], { icon: customIcon }).addTo(appState.map);
+            } else {
+                appState.marker.setLatLng([lat, lng]);
+            }
+
+            if (!appState.accuracyCircle) {
+                appState.accuracyCircle = L.circle([lat, lng], {
+                    radius: accuracy,
+                    color: '#3b82f6',
+                    fillColor: '#60a5fa',
+                    fillOpacity: 0.15,
+                    weight: 1
+                }).addTo(appState.map);
+            } else {
+                appState.accuracyCircle.setLatLng([lat, lng]);
+                appState.accuracyCircle.setRadius(accuracy);
+            }
+
+            // Recenter map if follow mode active
+            if (appState.isFollowing) {
+                appState.map.panTo([lat, lng]);
+            }
+
+            // 3. Step 5 & 6: Save Raw Point & Update Polyline ONLY when RECORDING
+            if (appState.recordState === 'RECORDING') {
+                saveGPSPoint(position);
+            }
+        }
+
+        function saveGPSPoint(position) {
+            const coords = position.coords;
+            const lat = coords.latitude;
+            const lng = coords.longitude;
+            const timestamp = position.timestamp || Date.now();
+
+            // Structure point object exactly as required for research logging
+            const pointId = appState.recordedPoints.length + 1;
+            const pointData = {
+                point_id: pointId,
+                timestamp: timestamp,
+                iso_time: new Date(timestamp).toISOString(),
+                latitude: lat,
+                longitude: lng,
+                accuracy: coords.accuracy !== undefined ? coords.accuracy : null,
+                altitude: coords.altitude !== undefined ? coords.altitude : null,
+                speed: coords.speed !== undefined ? coords.speed : null,
+                heading: coords.heading !== undefined ? coords.heading : null
+            };
+
+            // Calculate Distance increment using Haversine Formula
+            if (appState.recordedPoints.length > 0) {
+                const prevPoint = appState.recordedPoints[appState.recordedPoints.length - 1];
+                const distMeters = calculateHaversineDistance(
+                    prevPoint.latitude, prevPoint.longitude,
+                    lat, lng
+                );
+                appState.totalDistanceMeters += distMeters;
+            }
+
+            // Store raw point to state array
+            appState.recordedPoints.push(pointData);
+
+            // Step 6: Real-time Polyline Update
+            appState.polyline.addLatLng([lat, lng]);
+
+            // Step 8: Update UI counters
+            dom.pointCount.textContent = `${appState.recordedPoints.length} pts`;
+            if (appState.totalDistanceMeters >= 1000) {
+                dom.distanceVal.textContent = `${(appState.totalDistanceMeters / 1000).toFixed(2)} km`;
+            } else {
+                dom.distanceVal.textContent = `${Math.round(appState.totalDistanceMeters)} m`;
+            }
+        }
+
+        function onLocationError(error) {
+            console.warn("GPS Location Error:", error);
+            dom.gpsStatus.textContent = "エラー";
+            dom.gpsStatus.className = "badge badge-danger";
+        }
+
+
+        // --- Step 7: Recording State Machine ---
+        function setRecordState(newState) {
+            appState.recordState = newState;
+            
+            // Render State Badge UI
+            switch (newState) {
+                case 'IDLE':
+                    dom.recordState.textContent = "待機中";
+                    dom.recordState.className = "badge badge-warning";
+                    renderControlButtons();
+                    dom.exportControls.style.display = 'none';
+                    break;
+
+                case 'RECORDING':
+                    dom.recordState.textContent = "記録中";
+                    dom.recordState.className = "badge badge-success";
+                    startTimer();
+                    requestWakeLock();
+                    renderControlButtons();
+                    dom.exportControls.style.display = 'none';
+                    break;
+
+                case 'PAUSED':
+                    dom.recordState.textContent = "一時停止中";
+                    dom.recordState.className = "badge badge-purple";
+                    stopTimer();
+                    renderControlButtons();
+                    dom.exportControls.style.display = 'none';
+                    break;
+
+                case 'FINISHED':
+                    dom.recordState.textContent = "記録完了";
+                    dom.recordState.className = "badge badge-info";
+                    stopTimer();
+                    releaseWakeLock();
+                    appState.endTime = new Date();
+                    renderControlButtons();
+                    dom.exportControls.style.display = 'flex';
+                    showToast(`記録完了！ (${appState.recordedPoints.length} pts 取得)`);
+                    break;
+            }
+        }
+
+        // Render Control Panel Buttons according to current State
+        function renderControlButtons() {
+            dom.recordingControls.innerHTML = '';
+
+            if (appState.recordState === 'IDLE') {
+                const btnStart = document.createElement('button');
+                btnStart.className = 'btn btn-primary';
+                btnStart.innerHTML = '<i class="fa-solid fa-play"></i><span>記録開始</span>';
+                btnStart.onclick = startRecordingSession;
+                dom.recordingControls.appendChild(btnStart);
+            } 
+            else if (appState.recordState === 'RECORDING') {
+                const btnPause = document.createElement('button');
+                btnPause.className = 'btn btn-warning';
+                btnPause.innerHTML = '<i class="fa-solid fa-pause"></i><span>一時停止</span>';
+                btnPause.onclick = () => setRecordState('PAUSED');
+
+                const btnStop = document.createElement('button');
+                btnStop.className = 'btn btn-danger';
+                btnStop.innerHTML = '<i class="fa-solid fa-square"></i><span>記録終了</span>';
+                btnStop.onclick = () => setRecordState('FINISHED');
+
+                dom.recordingControls.appendChild(btnPause);
+                dom.recordingControls.appendChild(btnStop);
+            } 
+            else if (appState.recordState === 'PAUSED') {
+                const btnResume = document.createElement('button');
+                btnResume.className = 'btn btn-primary';
+                btnResume.innerHTML = '<i class="fa-solid fa-play"></i><span>記録再開</span>';
+                btnResume.onclick = () => setRecordState('RECORDING');
+
+                const btnStop = document.createElement('button');
+                btnStop.className = 'btn btn-danger';
+                btnStop.innerHTML = '<i class="fa-solid fa-square"></i><span>記録終了</span>';
+                btnStop.onclick = () => setRecordState('FINISHED');
+
+                dom.recordingControls.appendChild(btnResume);
+                dom.recordingControls.appendChild(btnStop);
+            }
+            else if (appState.recordState === 'FINISHED') {
+                const btnReset = document.createElement('button');
+                btnReset.className = 'btn btn-secondary';
+                btnReset.innerHTML = '<i class="fa-solid fa-rotate-left"></i><span>新規記録</span>';
+                btnReset.onclick = resetRecordingSession;
+                dom.recordingControls.appendChild(btnReset);
+            }
+        }
+
+        function startRecordingSession() {
+            // Generate Session ID based on timestamp
+            const now = new Date();
+            const timeStr = now.getFullYear() +
+                String(now.getMonth() + 1).padStart(2, '0') +
+                String(now.getDate()).padStart(2, '0') + "_" +
+                String(now.getHours()).padStart(2, '0') +
+                String(now.getMinutes()).padStart(2, '0') +
+                String(now.getSeconds()).padStart(2, '0');
+
+            appState.trackId = `TRK_${timeStr}`;
+            appState.startTime = now;
+            appState.recordedPoints = [];
+            appState.totalDistanceMeters = 0;
+            appState.elapsedSeconds = 0;
+            
+            // Clear previous map polyline
+            appState.polyline.setLatLngs([]);
+            
+            // Reset UI Counter
+            dom.pointCount.textContent = "0 pts";
+            dom.distanceVal.textContent = "0 m";
+            dom.timerVal.textContent = "00:00:00";
+
+            setRecordState('RECORDING');
+        }
+
+        function resetRecordingSession() {
+            setRecordState('IDLE');
+        }
+
+
+        // --- Step 8: Timer and Distance Helpers ---
+        function startTimer() {
+            if (appState.timerInterval) clearInterval(appState.timerInterval);
+            appState.timerInterval = setInterval(() => {
+                appState.elapsedSeconds++;
+                const hrs = String(Math.floor(appState.elapsedSeconds / 3600)).padStart(2, '0');
+                const mins = String(Math.floor((appState.elapsedSeconds % 3600) / 60)).padStart(2, '0');
+                const secs = String(appState.elapsedSeconds % 60).padStart(2, '0');
+                dom.timerVal.textContent = `${hrs}:${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function stopTimer() {
+            if (appState.timerInterval) {
+                clearInterval(appState.timerInterval);
+                appState.timerInterval = null;
+            }
+        }
+
+        // Haversine formula for exact spherical distance in meters
+        function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Earth's mean radius in meters
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+
+        // --- Step 9: GeoJSON & CSV Export Generator ---
+        function exportGeoJSON() {
+            if (appState.recordedPoints.length === 0) {
+                showToast("保存するGPSポイントデータがありません。");
+                return;
+            }
+
+            // CRITICAL FOR GIS: Convert lat/lng to GeoJSON standard [longitude, latitude]
+            const lineCoordinates = appState.recordedPoints.map(p => [p.longitude, p.latitude]);
+
+            const geojsonObj = {
+                "type": "FeatureCollection",
+                "name": `Walk_Trajectory_${appState.trackId}`,
+                "crs": {
+                    "type": "name",
+                    "properties": {
+                        "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+                    }
+                },
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "track_id": appState.trackId,
+                            "start_time": appState.startTime ? appState.startTime.toISOString() : null,
+                            "end_time": appState.endTime ? appState.endTime.toISOString() : null,
+                            "total_points": appState.recordedPoints.length,
+                            "total_distance_m": parseFloat(appState.totalDistanceMeters.toFixed(2)),
+                            "elapsed_seconds": appState.elapsedSeconds
+                        },
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": lineCoordinates
+                        }
+                    }
+                ]
+            };
+
+            const jsonString = JSON.stringify(geojsonObj, null, 2);
+            const fileName = `walking_${formatDateForFilename(appState.startTime)}.geojson`;
+            downloadFile(jsonString, fileName, 'application/geo+json');
+        }
+
+        function exportCSV() {
+            if (appState.recordedPoints.length === 0) {
+                showToast("保存するGPSポイントデータがありません。");
+                return;
+            }
+
+            // Header line matching user requirements
+            const headers = [
+                "track_id",
+                "point_id",
+                "timestamp",
+                "iso_time",
+                "longitude",
+                "latitude",
+                "accuracy",
+                "altitude",
+                "speed",
+                "heading"
+            ];
+
+            let csvContent = headers.join(",") + "\n";
+
+            appState.recordedPoints.forEach(p => {
+                const row = [
+                    appState.trackId,
+                    p.point_id,
+                    p.timestamp,
+                    `"${p.iso_time}"`,
+                    p.longitude,
+                    p.latitude,
+                    p.accuracy !== null ? p.accuracy : "",
+                    p.altitude !== null ? p.altitude : "",
+                    p.speed !== null ? p.speed : "",
+                    p.heading !== null ? p.heading : ""
+                ];
+                csvContent += row.join(",") + "\n";
+            });
+
+            const fileName = `walking_${formatDateForFilename(appState.startTime)}.csv`;
+            downloadFile(csvContent, fileName, 'text/csv;charset=utf-8;');
+        }
+
+        function downloadFile(content, fileName, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        function formatDateForFilename(dateObj) {
+            const d = dateObj || new Date();
+            return d.getFullYear() +
+                String(d.getMonth() + 1).padStart(2, '0') +
+                String(d.getDate()).padStart(2, '0') + "_" +
+                String(d.getHours()).padStart(2, '0') +
+                String(d.getMinutes()).padStart(2, '0') +
+                String(d.getSeconds()).padStart(2, '0');
+        }
+
+        // --- Screen Wake Lock Helper ---
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    appState.wakeLock = await navigator.wakeLock.request('screen');
+                }
+            } catch (err) {
+                console.log("Wake Lock Request Error:", err.message);
+            }
+        }
+
+        function releaseWakeLock() {
+            if (appState.wakeLock !== null) {
+                appState.wakeLock.release().then(() => {
+                    appState.wakeLock = null;
+                });
+            }
+        }
+
+        // --- UI Interactions & Event Binding ---
+        function setFollowState(enable) {
+            appState.isFollowing = enable;
+            if (enable) {
+                dom.btnFollow.classList.add('btn-active');
+                dom.btnFollow.querySelector('span').textContent = "追従 ON";
+                if (appState.currentLocation) {
+                    appState.map.panTo(appState.currentLocation);
+                }
+            } else {
+                dom.btnFollow.classList.remove('btn-active');
+                dom.btnFollow.querySelector('span').textContent = "追従 OFF";
+            }
+        }
+
+        function setupEventListeners() {
+            // Recenter Camera Button
+            dom.btnRecenter.addEventListener('click', () => {
+                if (appState.currentLocation) {
+                    appState.map.setView(appState.currentLocation, 18);
+                    setFollowState(true);
+                } else {
+                    showToast("現在地を取得中です。少々お待ちください。");
+                }
+            });
+
+            // Follow Toggle Button
+            dom.btnFollow.addEventListener('click', () => {
+                setFollowState(!appState.isFollowing);
+            });
+
+            // Export Buttons
+            document.getElementById('btn-export-geojson').addEventListener('click', exportGeoJSON);
+            document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
+        }
+
+        function showToast(message) {
+            // Non-blocking Toast notification UI
+            const toast = document.createElement('div');
+            toast.style.position = 'fixed';
+            toast.style.bottom = '90px';
+            toast.style.left = '50%';
+            toast.style.transform = 'translateX(-50%)';
+            toast.style.backgroundColor = 'rgba(15, 23, 42, 0.95)';
+            toast.style.color = '#ffffff';
+            toast.style.padding = '10px 18px';
+            toast.style.borderRadius = '20px';
+            toast.style.fontSize = '12px';
+            toast.style.fontWeight = '600';
+            toast.style.zIndex = '2000';
+            toast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
+            toast.style.border = '1px solid rgba(255,255,255,0.2)';
+            toast.textContent = message;
+
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.4s ease';
+                setTimeout(() => document.body.removeChild(toast), 400);
+            }, 2500);
+        }
+
+        // Initialize Application on DOM Ready
+        window.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            setupEventListeners();
+            setRecordState('IDLE');
+            startGPSWatch();
+        });
+    </script>
+</body>
+</html>
