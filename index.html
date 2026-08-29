@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>卒論用 GPS歩行経路記録アプリ (Step 5-9 Complete)</title>
+    <title>卒論用 GPS歩行経路記録アプリ (リアルタイム軌跡描画版)</title>
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -163,17 +163,12 @@
             backdrop-filter: blur(8px);
         }
 
-        .btn-export {
-            background: linear-gradient(135deg, #6366f1, #4f46e5);
-            color: #ffffff;
-        }
-
         .btn-active {
             background: #3b82f6 !important;
             color: #ffffff !important;
         }
 
-        /* Custom Marker Pulse Effect */
+        /* Custom Pulse Marker Animation */
         .gps-pulse-icon {
             background: #3b82f6;
             border: 3px solid #ffffff;
@@ -181,7 +176,6 @@
             box-shadow: 0 0 12px rgba(59, 130, 246, 0.9);
         }
 
-        /* Leaflet Control Adjustment for Mobile */
         .leaflet-control-attribution {
             font-size: 9px !important;
             background: rgba(255, 255, 255, 0.7) !important;
@@ -210,7 +204,7 @@
                 </div>
             </div>
 
-            <!-- Row 2: Walk Distance & Time Metrics -->
+            <!-- Row 2: Walk Distance & Point Metrics -->
             <div class="status-grid" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.12);">
                 <div class="status-item">
                     <span class="status-label">取得ポイント</span>
@@ -242,9 +236,9 @@
         <!-- Leaflet Map Canvas -->
         <div id="map"></div>
 
-        <!-- Controls -->
+        <!-- Controls Panel -->
         <div id="control-panel">
-            <!-- Camera & Follow Toggle Row -->
+            <!-- Camera Follow Controls -->
             <div class="action-row">
                 <button id="btn-recenter" class="btn btn-secondary">
                     <i class="fa-solid fa-crosshairs"></i>
@@ -256,25 +250,9 @@
                 </button>
             </div>
 
-            <!-- Main Dynamic Control Row for Recording -->
+            <!-- Dynamic Record Control Buttons -->
             <div id="recording-controls" class="action-row">
-                <!-- Buttons will be dynamically updated by JavaScript according to state -->
-                <button id="btn-main-record" class="btn btn-primary">
-                    <i class="fa-solid fa-play"></i>
-                    <span>記録開始</span>
-                </button>
-            </div>
-
-            <!-- Export Buttons Row (Shown when Finished) -->
-            <div id="export-controls" class="action-row" style="display: none;">
-                <button id="btn-export-geojson" class="btn btn-export">
-                    <i class="fa-solid fa-file-code"></i>
-                    <span>GeoJSON 保存</span>
-                </button>
-                <button id="btn-export-csv" class="btn btn-export">
-                    <i class="fa-solid fa-file-csv"></i>
-                    <span>CSV 保存</span>
-                </button>
+                <!-- JS側で状態に応じて動的に差し替えます -->
             </div>
         </div>
     </div>
@@ -284,13 +262,13 @@
 
     <script>
 
-        // --- State Management ---
+        // --- 1. アプリケーション全体の状態管理 (State) ---
         const appState = {
-            // Leaflet instances
+            // Leaflet 描画オブジェクト
             map: null,
             marker: null,
             accuracyCircle: null,
-            polyline: null,
+            polyline: null, // リアルタイム軌跡表示用のPolylineインスタンス
 
             // GPS Raw State
             currentLocation: null, // [lat, lng]
@@ -298,23 +276,22 @@
             watchId: null,
             isFollowing: true,
 
-            // Recording Session State
+            // 記録セッション State
             recordState: 'IDLE', // 'IDLE' | 'RECORDING' | 'PAUSED' | 'FINISHED'
-            trackId: '',
             startTime: null,
-            endTime: null,
-            recordedPoints: [], // Raw point logs for research
+            
+            // 卒論研究用の生GPSログ保持用配列 (Raw Log)
+            rawGPSPoints: [],
+            
+            // 総歩行距離（メートル）
             totalDistanceMeters: 0,
             
-            // Timer State
+            // 経過時間タイマー
             elapsedSeconds: 0,
-            timerInterval: null,
-
-            // Screen Wake Lock (To prevent phone sleep during walk)
-            wakeLock: null
+            timerInterval: null
         };
 
-        // --- DOM Elements Reference ---
+        // --- 2. DOM要素の参照取得 ---
         const dom = {
             gpsStatus: document.getElementById('gps-status'),
             gpsAccuracy: document.getElementById('gps-accuracy'),
@@ -326,14 +303,14 @@
             sensorVal: document.getElementById('sensor-val'),
             btnRecenter: document.getElementById('btn-recenter'),
             btnFollow: document.getElementById('btn-follow'),
-            recordingControls: document.getElementById('recording-controls'),
-            exportControls: document.getElementById('export-controls')
+            recordingControls: document.getElementById('recording-controls')
         };
 
 
-        // --- Map Initialization ---
+
+        // --- 3. 地図の初期化 ---
         function initMap() {
-            // Tokyo Station as default view center until initial GPS fix
+            // 初期表示は東京駅付近（GPS測位完了後に自動で現在地に移動します）
             const defaultCoords = [35.681236, 139.767125];
             
             appState.map = L.map('map', {
@@ -341,7 +318,7 @@
                 attributionControl: true
             }).setView(defaultCoords, 16);
 
-            // OpenStreetMap Standard Tiles
+            // OpenStreetMap タイル設定
             L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 maxZoom: 19,
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -349,22 +326,23 @@
 
             L.control.zoom({ position: 'topright' }).addTo(appState.map);
 
-            // Create initial Polyline for tracking route
+            // 軌跡描画用 Polyline の初期生成（太さ・カラーの設定）
             appState.polyline = L.polyline([], {
-                color: '#ec4899', // Bright Pink for research visibility
+                color: '#ec4899', // 視認性の高いピンク色（研究検証用）
                 weight: 5,
                 opacity: 0.85,
                 lineJoin: 'round'
             }).addTo(appState.map);
 
-            // Stop auto-following if user manually drags map
+            // ユーザーが手動で地図をドラッグ操作したらカメラ追従をオフにする
             appState.map.on('dragstart', () => {
                 setFollowState(false);
             });
         }
 
 
-        // --- Geolocation Watcher ---
+
+        // --- 4. GPS位置情報の連続取得開始 ---
         function startGPSWatch() {
             if (!("geolocation" in navigator)) {
                 dom.gpsStatus.textContent = "非対応";
@@ -374,11 +352,12 @@
             }
 
             const options = {
-                enableHighAccuracy: true, // Force hardware GPS usage
-                timeout: 20000,           // 20s max timeout per location update
-                maximumAge: 0             // Always request fresh real-time position
+                enableHighAccuracy: true, // スマホのGPSハードウェアを優先利用
+                timeout: 20000,           // タイムアウト20秒
+                maximumAge: 0             // キャッシュを使わず常に最新位置をリクエスト
             };
 
+            // watchPosition で常時位置の変化を監視
             appState.watchId = navigator.geolocation.watchPosition(
                 onLocationSuccess,
                 onLocationError,
@@ -386,13 +365,13 @@
             );
         }
 
+        // GPS測位成功時のハンドラ
         function onLocationSuccess(position) {
             const coords = position.coords;
             const lat = coords.latitude;
             const lng = coords.longitude;
             const accuracy = coords.accuracy;
 
-            // Basic validation for invalid coordinate values
             if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
                 return;
             }
@@ -400,7 +379,7 @@
             appState.currentLocation = [lat, lng];
             appState.currentAccuracy = accuracy;
 
-            // 1. Update UI Metrics Panel
+            // --- UIの基本表示を更新 ---
             dom.gpsAccuracy.textContent = `${accuracy.toFixed(1)} m`;
             dom.coordsVal.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
             
@@ -408,7 +387,7 @@
             const headingDeg = (coords.heading !== null && !isNaN(coords.heading)) ? Math.round(coords.heading) : "--";
             dom.sensorVal.textContent = `${speedKmH}km/h | ${headingDeg}°`;
 
-            // Update GPS Signal Quality Indicator
+            // 精度ステータスのバッジ更新
             if (accuracy <= 10) {
                 dom.gpsStatus.textContent = "高精度";
                 dom.gpsStatus.className = "badge badge-success";
@@ -420,7 +399,7 @@
                 dom.gpsStatus.className = "badge badge-warning";
             }
 
-            // 2. Update Map Marker & Accuracy Circle
+            // --- 現在地マーカー & 精度円の更新 ---
             if (!appState.marker) {
                 const customIcon = L.divIcon({
                     className: 'gps-pulse-icon',
@@ -445,124 +424,131 @@
                 appState.accuracyCircle.setRadius(accuracy);
             }
 
-            // Recenter map if follow mode active
+            // 追従モード有効時は画面中央を現在地に維持
             if (appState.isFollowing) {
                 appState.map.panTo([lat, lng]);
             }
 
-            // 3. Step 5 & 6: Save Raw Point & Update Polyline ONLY when RECORDING
+            // --- 【重要】『RECORDING（記録中）』状態のときのみGPSポイントを保存・軌跡描画 ---
             if (appState.recordState === 'RECORDING') {
-                saveGPSPoint(position);
-            }
-        }
-
-        function saveGPSPoint(position) {
-            const coords = position.coords;
-            const lat = coords.latitude;
-            const lng = coords.longitude;
-            const timestamp = position.timestamp || Date.now();
-
-            // Structure point object exactly as required for research logging
-            const pointId = appState.recordedPoints.length + 1;
-            const pointData = {
-                point_id: pointId,
-                timestamp: timestamp,
-                iso_time: new Date(timestamp).toISOString(),
-                latitude: lat,
-                longitude: lng,
-                accuracy: coords.accuracy !== undefined ? coords.accuracy : null,
-                altitude: coords.altitude !== undefined ? coords.altitude : null,
-                speed: coords.speed !== undefined ? coords.speed : null,
-                heading: coords.heading !== undefined ? coords.heading : null
-            };
-
-            // Calculate Distance increment using Haversine Formula
-            if (appState.recordedPoints.length > 0) {
-                const prevPoint = appState.recordedPoints[appState.recordedPoints.length - 1];
-                const distMeters = calculateHaversineDistance(
-                    prevPoint.latitude, prevPoint.longitude,
-                    lat, lng
-                );
-                appState.totalDistanceMeters += distMeters;
-            }
-
-            // Store raw point to state array
-            appState.recordedPoints.push(pointData);
-
-            // Step 6: Real-time Polyline Update
-            appState.polyline.addLatLng([lat, lng]);
-
-            // Step 8: Update UI counters
-            dom.pointCount.textContent = `${appState.recordedPoints.length} pts`;
-            if (appState.totalDistanceMeters >= 1000) {
-                dom.distanceVal.textContent = `${(appState.totalDistanceMeters / 1000).toFixed(2)} km`;
-            } else {
-                dom.distanceVal.textContent = `${Math.round(appState.totalDistanceMeters)} m`;
+                processAndSaveGPSPoint(position);
             }
         }
 
         function onLocationError(error) {
-            console.warn("GPS Location Error:", error);
+            console.warn("GPS 取得エラー:", error);
             dom.gpsStatus.textContent = "エラー";
             dom.gpsStatus.className = "badge badge-danger";
         }
 
 
-        // --- Step 7: Recording State Machine ---
+
+        // --- 5. GPSポイントの保存とリアルタイム軌跡描画 ---
+        function processAndSaveGPSPoint(position) {
+            const coords = position.coords;
+            const lat = coords.latitude;
+            const lng = coords.longitude;
+            const accuracy = coords.accuracy !== undefined ? coords.accuracy : null;
+            const timestamp = position.timestamp || Date.now();
+
+            // 卒論研究用の構造化されたデータオブジェクト作成
+            const rawPoint = {
+                latitude: lat,
+                longitude: lng,
+                accuracy: accuracy,
+                timestamp: timestamp,
+                altitude: coords.altitude !== undefined ? coords.altitude : null,
+                speed: coords.speed !== undefined ? coords.speed : null,
+                heading: coords.heading !== undefined ? coords.heading : null
+            };
+
+            // 簡易ノイズフィルター: 精度が40m以上と著しく悪質なGPSデータは距離計算と軌跡描画から除外
+            const IS_ACCURACY_ACCEPTABLE = accuracy === null || accuracy <= 40;
+
+            if (IS_ACCURACY_ACCEPTABLE) {
+                // 前回記録した有効なポイントとの距離を計算
+                if (appState.rawGPSPoints.length > 0) {
+                    const prevPoint = appState.rawGPSPoints[appState.rawGPSPoints.length - 1];
+                    const distanceIncrement = calculateHaversineDistance(
+                        prevPoint.latitude, prevPoint.longitude,
+                        lat, lng
+                    );
+
+                    // 異常値ノイズ対策: 1回の取得間隔で急激に150m以上移動した場合はGPSスパイク（飛躍ノイズ）とみなして距離加算をスキップ
+                    if (distanceIncrement < 150) {
+                        appState.totalDistanceMeters += distanceIncrement;
+                    }
+                }
+
+                // ① 将来のQGIS/GeoJSON変換用 生GPS配列への保存
+                appState.rawGPSPoints.push(rawPoint);
+
+                // ② Leaflet Polyline への座標追加（リアルタイム描画）
+                appState.polyline.addLatLng([lat, lng]);
+
+                // ③ Dashboard UIの更新
+                dom.pointCount.textContent = `${appState.rawGPSPoints.length} pts`;
+                
+                if (appState.totalDistanceMeters >= 1000) {
+                    dom.distanceVal.textContent = `${(appState.totalDistanceMeters / 1000).toFixed(2)} km`;
+                } else {
+                    dom.distanceVal.textContent = `${Math.round(appState.totalDistanceMeters)} m`;
+                }
+            }
+        }
+
+
+
+        // --- 6. 記録状態 (State Machine) の管理 ---
         function setRecordState(newState) {
             appState.recordState = newState;
-            
-            // Render State Badge UI
+
             switch (newState) {
-                case 'IDLE':
+                case 'IDLE': // 待機中
                     dom.recordState.textContent = "待機中";
                     dom.recordState.className = "badge badge-warning";
+                    stopTimer();
                     renderControlButtons();
-                    dom.exportControls.style.display = 'none';
                     break;
 
-                case 'RECORDING':
+                case 'RECORDING': // 記録中
                     dom.recordState.textContent = "記録中";
                     dom.recordState.className = "badge badge-success";
                     startTimer();
-                    requestWakeLock();
                     renderControlButtons();
-                    dom.exportControls.style.display = 'none';
                     break;
 
-                case 'PAUSED':
+                case 'PAUSED': // 一時停止中
                     dom.recordState.textContent = "一時停止中";
                     dom.recordState.className = "badge badge-purple";
                     stopTimer();
                     renderControlButtons();
-                    dom.exportControls.style.display = 'none';
                     break;
 
-                case 'FINISHED':
+                case 'FINISHED': // 記録完了
                     dom.recordState.textContent = "記録完了";
                     dom.recordState.className = "badge badge-info";
                     stopTimer();
-                    releaseWakeLock();
-                    appState.endTime = new Date();
                     renderControlButtons();
-                    dom.exportControls.style.display = 'flex';
-                    showToast(`記録完了！ (${appState.recordedPoints.length} pts 取得)`);
+                    showToast(`記録完了！ (${appState.rawGPSPoints.length} pts 取得)`);
                     break;
             }
         }
 
-        // Render Control Panel Buttons according to current State
+        // 状態に応じたコントロールボタンの動的レンダリング
         function renderControlButtons() {
             dom.recordingControls.innerHTML = '';
 
             if (appState.recordState === 'IDLE') {
+                // 待機中： [記録開始] ボタンを表示
                 const btnStart = document.createElement('button');
                 btnStart.className = 'btn btn-primary';
                 btnStart.innerHTML = '<i class="fa-solid fa-play"></i><span>記録開始</span>';
-                btnStart.onclick = startRecordingSession;
+                btnStart.onclick = startRecording;
                 dom.recordingControls.appendChild(btnStart);
             } 
             else if (appState.recordState === 'RECORDING') {
+                // 記録中： [一時停止] [記録終了] ボタンを表示
                 const btnPause = document.createElement('button');
                 btnPause.className = 'btn btn-warning';
                 btnPause.innerHTML = '<i class="fa-solid fa-pause"></i><span>一時停止</span>';
@@ -577,6 +563,7 @@
                 dom.recordingControls.appendChild(btnStop);
             } 
             else if (appState.recordState === 'PAUSED') {
+                // 一時停止中： [記録再開] [記録終了] ボタンを表示
                 const btnResume = document.createElement('button');
                 btnResume.className = 'btn btn-primary';
                 btnResume.innerHTML = '<i class="fa-solid fa-play"></i><span>記録再開</span>';
@@ -591,34 +578,26 @@
                 dom.recordingControls.appendChild(btnStop);
             }
             else if (appState.recordState === 'FINISHED') {
+                // 記録終了： [新規記録] ボタンを表示（リセット）
                 const btnReset = document.createElement('button');
                 btnReset.className = 'btn btn-secondary';
                 btnReset.innerHTML = '<i class="fa-solid fa-rotate-left"></i><span>新規記録</span>';
-                btnReset.onclick = resetRecordingSession;
+                btnReset.onclick = resetRecording;
                 dom.recordingControls.appendChild(btnReset);
             }
         }
 
-        function startRecordingSession() {
-            // Generate Session ID based on timestamp
-            const now = new Date();
-            const timeStr = now.getFullYear() +
-                String(now.getMonth() + 1).padStart(2, '0') +
-                String(now.getDate()).padStart(2, '0') + "_" +
-                String(now.getHours()).padStart(2, '0') +
-                String(now.getMinutes()).padStart(2, '0') +
-                String(now.getSeconds()).padStart(2, '0');
-
-            appState.trackId = `TRK_${timeStr}`;
-            appState.startTime = now;
-            appState.recordedPoints = [];
+        // 記録開始の処理
+        function startRecording() {
+            appState.startTime = new Date();
+            appState.rawGPSPoints = [];
             appState.totalDistanceMeters = 0;
             appState.elapsedSeconds = 0;
             
-            // Clear previous map polyline
+            // 地図上の軌跡（Polyline）を初期化クリア
             appState.polyline.setLatLngs([]);
-            
-            // Reset UI Counter
+
+            // UIをリセット
             dom.pointCount.textContent = "0 pts";
             dom.distanceVal.textContent = "0 m";
             dom.timerVal.textContent = "00:00:00";
@@ -626,12 +605,14 @@
             setRecordState('RECORDING');
         }
 
-        function resetRecordingSession() {
+        // 新規記録リセット
+        function resetRecording() {
             setRecordState('IDLE');
         }
 
 
-        // --- Step 8: Timer and Distance Helpers ---
+
+        // --- 7. タイマーと距離計算ユーティリティ ---
         function startTimer() {
             if (appState.timerInterval) clearInterval(appState.timerInterval);
             appState.timerInterval = setInterval(() => {
@@ -650,9 +631,9 @@
             }
         }
 
-        // Haversine formula for exact spherical distance in meters
+        // 2点間の球面距離計算（Haversineの公式 : 戻り値メートル）
         function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
-            const R = 6371000; // Earth's mean radius in meters
+            const R = 6371000; // 地球の半径（メートル）
             const dLat = (lat2 - lat1) * Math.PI / 180;
             const dLon = (lon2 - lon1) * Math.PI / 180;
             const a = 
@@ -664,133 +645,8 @@
         }
 
 
-        // --- Step 9: GeoJSON & CSV Export Generator ---
-        function exportGeoJSON() {
-            if (appState.recordedPoints.length === 0) {
-                showToast("保存するGPSポイントデータがありません。");
-                return;
-            }
 
-            // CRITICAL FOR GIS: Convert lat/lng to GeoJSON standard [longitude, latitude]
-            const lineCoordinates = appState.recordedPoints.map(p => [p.longitude, p.latitude]);
-
-            const geojsonObj = {
-                "type": "FeatureCollection",
-                "name": `Walk_Trajectory_${appState.trackId}`,
-                "crs": {
-                    "type": "name",
-                    "properties": {
-                        "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
-                    }
-                },
-                "features": [
-                    {
-                        "type": "Feature",
-                        "properties": {
-                            "track_id": appState.trackId,
-                            "start_time": appState.startTime ? appState.startTime.toISOString() : null,
-                            "end_time": appState.endTime ? appState.endTime.toISOString() : null,
-                            "total_points": appState.recordedPoints.length,
-                            "total_distance_m": parseFloat(appState.totalDistanceMeters.toFixed(2)),
-                            "elapsed_seconds": appState.elapsedSeconds
-                        },
-                        "geometry": {
-                            "type": "LineString",
-                            "coordinates": lineCoordinates
-                        }
-                    }
-                ]
-            };
-
-            const jsonString = JSON.stringify(geojsonObj, null, 2);
-            const fileName = `walking_${formatDateForFilename(appState.startTime)}.geojson`;
-            downloadFile(jsonString, fileName, 'application/geo+json');
-        }
-
-        function exportCSV() {
-            if (appState.recordedPoints.length === 0) {
-                showToast("保存するGPSポイントデータがありません。");
-                return;
-            }
-
-            // Header line matching user requirements
-            const headers = [
-                "track_id",
-                "point_id",
-                "timestamp",
-                "iso_time",
-                "longitude",
-                "latitude",
-                "accuracy",
-                "altitude",
-                "speed",
-                "heading"
-            ];
-
-            let csvContent = headers.join(",") + "\n";
-
-            appState.recordedPoints.forEach(p => {
-                const row = [
-                    appState.trackId,
-                    p.point_id,
-                    p.timestamp,
-                    `"${p.iso_time}"`,
-                    p.longitude,
-                    p.latitude,
-                    p.accuracy !== null ? p.accuracy : "",
-                    p.altitude !== null ? p.altitude : "",
-                    p.speed !== null ? p.speed : "",
-                    p.heading !== null ? p.heading : ""
-                ];
-                csvContent += row.join(",") + "\n";
-            });
-
-            const fileName = `walking_${formatDateForFilename(appState.startTime)}.csv`;
-            downloadFile(csvContent, fileName, 'text/csv;charset=utf-8;');
-        }
-
-        function downloadFile(content, fileName, mimeType) {
-            const blob = new Blob([content], { type: mimeType });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = fileName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-
-        function formatDateForFilename(dateObj) {
-            const d = dateObj || new Date();
-            return d.getFullYear() +
-                String(d.getMonth() + 1).padStart(2, '0') +
-                String(d.getDate()).padStart(2, '0') + "_" +
-                String(d.getHours()).padStart(2, '0') +
-                String(d.getMinutes()).padStart(2, '0') +
-                String(d.getSeconds()).padStart(2, '0');
-        }
-
-        // --- Screen Wake Lock Helper ---
-        async function requestWakeLock() {
-            try {
-                if ('wakeLock' in navigator) {
-                    appState.wakeLock = await navigator.wakeLock.request('screen');
-                }
-            } catch (err) {
-                console.log("Wake Lock Request Error:", err.message);
-            }
-        }
-
-        function releaseWakeLock() {
-            if (appState.wakeLock !== null) {
-                appState.wakeLock.release().then(() => {
-                    appState.wakeLock = null;
-                });
-            }
-        }
-
-        // --- UI Interactions & Event Binding ---
+        // --- 8. UIイベントハンドラ ---
         function setFollowState(enable) {
             appState.isFollowing = enable;
             if (enable) {
@@ -806,28 +662,23 @@
         }
 
         function setupEventListeners() {
-            // Recenter Camera Button
+            // 現在地ボタン
             dom.btnRecenter.addEventListener('click', () => {
                 if (appState.currentLocation) {
                     appState.map.setView(appState.currentLocation, 18);
                     setFollowState(true);
                 } else {
-                    showToast("現在地を取得中です。少々お待ちください。");
+                    showToast("現在地を取得中です...");
                 }
             });
 
-            // Follow Toggle Button
+            // 追従切り替えボタン
             dom.btnFollow.addEventListener('click', () => {
                 setFollowState(!appState.isFollowing);
             });
-
-            // Export Buttons
-            document.getElementById('btn-export-geojson').addEventListener('click', exportGeoJSON);
-            document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
         }
 
         function showToast(message) {
-            // Non-blocking Toast notification UI
             const toast = document.createElement('div');
             toast.style.position = 'fixed';
             toast.style.bottom = '90px';
@@ -852,7 +703,7 @@
             }, 2500);
         }
 
-        // Initialize Application on DOM Ready
+        // アプリ起動時の初期化
         window.addEventListener('DOMContentLoaded', () => {
             initMap();
             setupEventListeners();
